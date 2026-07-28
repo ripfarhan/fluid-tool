@@ -1,0 +1,1398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LIQUID · fluid image tool</title>
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --panel: #16161a;
+    --panel2: #1c1c21;
+    --line: rgba(255, 255, 255, 0.09);
+    --line2: rgba(255, 255, 255, 0.14);
+    --txt: #e9e9ec;
+    --dim: #9a9aa4;
+    --dim2: #6c6c78;
+    --orange: #e87d0d;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  /* author `display` rules beat the UA's [hidden]{display:none}, and both the
+     canvas and the dropzone set one — without this they'd never actually hide
+     and would sit side by side in the flex stage */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--txt);
+    font-family: var(--mono);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    flex: none;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 {
+    margin: 0;
+    font-size: 15px;
+    letter-spacing: 0.22em;
+    font-weight: 600;
+  }
+  h1 b { color: var(--orange); font-weight: 600; }
+  .sub { font-size: 11px; letter-spacing: 0.06em; color: var(--dim2); }
+  .hdr-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .hdr-btn {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    background: transparent;
+    border: 1px solid var(--line2);
+    border-radius: 6px;
+    padding: 5px 9px;
+    cursor: pointer;
+  }
+  .hdr-btn:hover { color: var(--orange); border-color: var(--orange); }
+
+  main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  /* ---- stage ---- */
+  .stage {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 26px;
+    position: relative;
+  }
+  .stage.drag::after {
+    content: "";
+    position: absolute;
+    inset: 14px;
+    border: 1.5px dashed var(--orange);
+    border-radius: 12px;
+    pointer-events: none;
+  }
+  canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 4px;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .drop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 54px 60px;
+    border: 1.5px dashed var(--line2);
+    border-radius: 14px;
+    color: var(--dim);
+    cursor: pointer;
+    text-align: center;
+    transition: border-color 0.25s ease, color 0.25s ease, opacity 0.25s ease;
+  }
+  .drop:hover { border-color: var(--orange); color: var(--txt); }
+  .drop strong { font-size: 14px; letter-spacing: 0.04em; color: var(--txt); }
+  .drop span { font-size: 11px; letter-spacing: 0.05em; color: var(--dim2); }
+  .drop.err { border-color: #d0473f; }
+  .drop.err span { color: #e07a72; }
+
+  /* once an image is up the dropzone shrinks to a corner chip so it stops
+     eating the stage but a new file can still be dropped anywhere */
+  .drop.mini {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    flex-direction: row;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border-style: solid;
+    border-color: var(--line);
+    background: rgba(13, 13, 15, 0.72);
+    backdrop-filter: blur(6px);
+    opacity: 0.42;
+    z-index: 3;
+  }
+  .drop.mini:hover { opacity: 1; }
+  .drop.mini svg { width: 13px; height: 13px; }
+  .drop.mini strong { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .drop.mini span { display: none; }
+  .drop.mini.err { opacity: 1; border-color: #d0473f; }
+  .drop.mini.err strong { color: #e07a72; text-transform: none; letter-spacing: 0.02em; }
+
+  /* ---- side panel ---- */
+  aside {
+    flex: none;
+    width: 302px;
+    border-left: 1px solid var(--line);
+    background: var(--panel);
+    padding: 16px 15px 18px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line2) transparent;
+  }
+  aside::-webkit-scrollbar { width: 8px; }
+  aside::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 8px; }
+  body.nopanel aside { display: none; }
+
+  .grp {
+    border-top: 1px solid var(--line);
+    padding: 12px 0 14px;
+  }
+  .grp:first-child { border-top: none; padding-top: 2px; }
+  .grp > summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--orange);
+    margin-bottom: 11px;
+  }
+  .grp > summary::-webkit-details-marker { display: none; }
+  .grp > summary::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+  }
+  .grp > summary::before {
+    content: "–";
+    color: var(--dim2);
+    width: 8px;
+  }
+  .grp:not([open]) > summary::before { content: "+"; }
+  .body { display: flex; flex-direction: column; gap: 10px; }
+
+  .row { display: flex; flex-direction: column; gap: 5px; }
+  .row-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--dim);
+  }
+  .row-head b { color: var(--txt); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .row.off { opacity: 0.35; }
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    border-radius: 3px;
+    background: var(--line2);
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--orange);
+    cursor: pointer;
+    border: none;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--orange); cursor: pointer; border: none;
+  }
+
+  select {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--txt);
+    background: var(--panel2);
+    border: 1px solid var(--line2);
+    border-radius: 6px;
+    padding: 6px 8px;
+    outline: none;
+    cursor: pointer;
+  }
+  select:focus { border-color: var(--orange); }
+
+  .swatch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  input[type="color"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 26px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--line2);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+  input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
+
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 9px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-align: center;
+    color: var(--txt);
+    background: var(--panel2);
+    border: 1px solid var(--line2);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, color 0.2s ease;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--orange); color: var(--orange); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: rgba(232, 125, 13, 0.14); border-color: rgba(232, 125, 13, 0.5); }
+  .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+
+  .chips {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .chip {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    text-align: left;
+    color: var(--dim);
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 7px 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: border-color 0.16s ease, color 0.16s ease;
+  }
+  /* the dot carries the preset's colour; the label stays on the panel ramp so
+     the dark presets don't vanish into the background */
+  .chip i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--dot, currentColor);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+    flex: none;
+  }
+  .chip:hover { color: var(--txt); border-color: var(--line2); }
+  .chip.on { color: var(--orange); border-color: rgba(232, 125, 13, 0.55); background: rgba(232, 125, 13, 0.1); }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--dim);
+    cursor: pointer;
+  }
+  .check input { accent-color: var(--orange); }
+
+  .note {
+    font-size: 9.5px;
+    line-height: 1.7;
+    letter-spacing: 0.02em;
+    color: var(--dim2);
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+    margin: 8px 0 0;
+  }
+  .note kbd {
+    font-family: var(--mono);
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0 3px;
+  }
+  .fname { font-size: 10px; color: var(--dim2); word-break: break-all; }
+  .stat {
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    color: var(--dim2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 820px) {
+    main { flex-direction: column; }
+    aside { width: auto; border-left: none; border-top: 1px solid var(--line); max-height: 48vh; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>LIQ<b>U</b>ID</h1>
+  <span class="sub">GPU Navier–Stokes · drop an image and push it around</span>
+  <span class="hdr-right">
+    <span class="stat" id="stat"></span>
+    <button class="hdr-btn" id="togglePanel">panel</button>
+  </span>
+</header>
+
+<main>
+  <div class="stage" id="stage">
+    <canvas id="cv" hidden></canvas>
+    <label class="drop" id="drop">
+      <input type="file" accept="image/*" id="pick" hidden />
+      <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor"
+           stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 16.5V19a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2.5M12 3v11m0-11L7.5 7.5M12 3l4.5 4.5" />
+      </svg>
+      <strong id="dropLabel">Drop an image here</strong>
+      <span id="dropSub">or click to browse · PNG, JPG, WebP</span>
+    </label>
+  </div>
+
+  <aside id="panel"></aside>
+</main>
+
+<script>
+/* =====================================================================
+   LIQUID — a GPU fluid solver applied to any uploaded image.
+   Extracted from the fluid headings on karamat.work: same passes,
+   same default constants. Single file, no dependencies.
+   ===================================================================== */
+
+const MAX_EDGE = 1600;        // cap uploads so huge photos don't stall
+const DROP_SUB = "or click to browse · PNG, JPG, WebP";
+
+/* ---------------- control surface ----------------
+   One flat spec drives the state object, the panel DOM, the readouts and the
+   presets — add a line here and everything downstream picks it up. */
+
+const x1 = (v) => v.toFixed(1);
+const x2 = (v) => v.toFixed(2);
+const int = (v) => String(Math.round(v));
+
+const SPEC = [
+  // --- flow ---
+  { k: "warp",     g: "Flow",   t: "range", label: "warp",            min: 0,    max: 24,  step: 0.1,  def: 3.5, fmt: (v) => v.toFixed(1) + "%" },
+  { k: "flow",     g: "Flow",   t: "range", label: "flow follow",     min: 0,    max: 4,   step: 0.05, def: 1,   fmt: x2 },
+  { k: "curl",     g: "Flow",   t: "range", label: "vorticity / curl",min: 0,    max: 80,  step: 1,    def: 22,  fmt: int },
+  { k: "vel",      g: "Flow",   t: "range", label: "velocity decay",  min: 0.05, max: 6,   step: 0.05, def: 1.6, fmt: x2 },
+  { k: "drift",    g: "Flow",   t: "range", label: "drift force",     min: 0,    max: 140, step: 1,    def: 0,   fmt: int },
+  { k: "dang",     g: "Flow",   t: "range", label: "drift angle",     min: 0,    max: 360, step: 1,    def: 270, fmt: (v) => Math.round(v) + "°", dep: (S) => S.drift > 0 },
+  { k: "res",      g: "Flow",   t: "range", label: "sim resolution",  min: 64,   max: 288, step: 16,   def: 144, fmt: int, realloc: true },
+  { k: "iters",    g: "Flow",   t: "range", label: "pressure iters",  min: 4,    max: 40,  step: 1,    def: 16,  fmt: int },
+
+  // --- brush ---
+  { k: "rad",      g: "Brush",  t: "range", label: "brush size",      min: 0.3,  max: 20,  step: 0.1,  def: 2.8, fmt: x1 },
+  { k: "force",    g: "Brush",  t: "range", label: "brush force",     min: 0.05, max: 5,   step: 0.05, def: 1,   fmt: x2 },
+  { k: "ink",      g: "Brush",  t: "range", label: "dye per stroke",  min: 0,    max: 3,   step: 0.05, def: 1,   fmt: x2 },
+  { k: "swirl",    g: "Brush",  t: "range", label: "resting swirl",   min: 0,    max: 140, step: 1,    def: 30,  fmt: int },
+  { k: "punch",    g: "Brush",  t: "range", label: "click impulse",   min: 0,    max: 5,   step: 0.1,  def: 1.6, fmt: x1 },
+
+  // --- dye ---
+  { k: "dyeMode",  g: "Dye",    t: "select", label: "dye source", def: "fixed", opts: [
+      ["fixed", "fixed colour"], ["cycle", "hue cycle"], ["flow", "hue by direction"], ["pickup", "pick up image colour"]] },
+  { k: "dyeColor", g: "Dye",    t: "color",  label: "dye colour", def: "#ff8a1e", dep: (S) => S.dyeMode === "fixed" },
+  { k: "hueSpd",   g: "Dye",    t: "range",  label: "hue speed",       min: 0.05, max: 3, step: 0.05, def: 0.5, fmt: x2, dep: (S) => S.dyeMode === "cycle" },
+  { k: "dyeBlend", g: "Dye",    t: "select", label: "dye blend", def: "add", opts: [
+      ["add", "glow (add)"], ["screen", "screen"], ["ink", "ink (stain)"], ["none", "off"]] },
+  { k: "glow",     g: "Dye",    t: "range",  label: "dye intensity",   min: 0,    max: 3,  step: 0.05, def: 1,   fmt: x2 },
+  { k: "dyeDecay", g: "Dye",    t: "range",  label: "dye decay",       min: 0.05, max: 8,  step: 0.05, def: 2.8, fmt: x2 },
+  { k: "soft",     g: "Dye",    t: "range",  label: "dye softness",    min: 0,    max: 5,  step: 0.1,  def: 1,   fmt: x1 },
+
+  // --- look ---
+  { k: "split",    g: "Look",   t: "range",  label: "chromatic split", min: 0,   max: 1.5, step: 0.01, def: 0.22, fmt: x2 },
+  { k: "amb",      g: "Look",   t: "range",  label: "ambient wobble",  min: 0,   max: 16,  step: 0.1,  def: 4.6,  fmt: x1 },
+  { k: "ambSpd",   g: "Look",   t: "range",  label: "wobble speed",    min: 0,   max: 3,   step: 0.05, def: 1,    fmt: x2, dep: (S) => S.amb > 0 },
+  { k: "exposure", g: "Look",   t: "range",  label: "exposure",        min: -1,  max: 1.5, step: 0.01, def: 0,    fmt: x2 },
+  { k: "contrast", g: "Look",   t: "range",  label: "contrast",        min: 0.4, max: 2,   step: 0.01, def: 1,    fmt: x2 },
+  { k: "sat",      g: "Look",   t: "range",  label: "saturation",      min: 0,   max: 2.5, step: 0.01, def: 1,    fmt: x2 },
+  { k: "grain",    g: "Look",   t: "range",  label: "grain",           min: 0,   max: 1,   step: 0.01, def: 0,    fmt: x2 },
+  { k: "vig",      g: "Look",   t: "range",  label: "vignette",        min: 0,   max: 1.2, step: 0.01, def: 0,    fmt: x2 },
+  { k: "view",     g: "Look",   t: "select", label: "view", def: "composite", opts: [
+      ["composite", "composite"], ["dye", "dye field"], ["velocity", "velocity field"]] },
+
+  // --- motion ---
+  { k: "idle",     g: "Motion", t: "range",  label: "idle energy",     min: 0,   max: 1,   step: 0.01, def: 0.24, fmt: x2 },
+  { k: "burst",    g: "Motion", t: "range",  label: "burst hold",      min: 0,   max: 6,   step: 0.1,  def: 2,    fmt: (v) => v.toFixed(1) + "s" },
+  { k: "wander",   g: "Motion", t: "bool",   label: "idle wander",     def: true },
+  { k: "wanAmp",   g: "Motion", t: "range",  label: "wander force",    min: 0,   max: 60,  step: 1,    def: 17,   fmt: int, dep: (S) => S.wander },
+  { k: "wanSpd",   g: "Motion", t: "range",  label: "wander speed",    min: 0.05,max: 3,   step: 0.05, def: 1,    fmt: x2, dep: (S) => S.wander },
+  { k: "freeze",   g: "Motion", t: "bool",   label: "freeze solver",   def: false },
+];
+
+const GROUPS = ["Flow", "Brush", "Dye", "Look", "Motion"];
+const DEFAULTS = {};
+for (const s of SPEC) DEFAULTS[s.k] = s.def;
+
+/* ---------------- presets ----------------
+   Each one is a delta on DEFAULTS, so switching between them is deterministic.
+   `_c` is only the dot colour on the chip. */
+
+const PRESETS = {
+  SIGNATURE: { _c: "#e87d0d" },                                  // the karamat.work heading values
+  SILK: { _c: "#ffd9a8",
+    warp: 2.2, curl: 6, vel: 0.6, dyeDecay: 1.4, glow: 0.55, soft: 2.4, split: 0.1,
+    amb: 3, ambSpd: 0.5, idle: 0.35, dyeColor: "#ffd9a8", sat: 1.05, rad: 4.5, force: 0.7 },
+  MOLTEN: { _c: "#ff5a00",
+    warp: 7, curl: 34, vel: 1.1, dyeDecay: 1.6, glow: 2.2, soft: 1.6, split: 0.35,
+    exposure: 0.12, contrast: 1.18, sat: 1.3, vig: 0.35, dyeColor: "#ff5a00", idle: 0.4, ink: 1.4 },
+  "INK BLOOM": { _c: "#2b3a7a",
+    warp: 5, curl: 12, vel: 0.5, dyeDecay: 0.35, glow: 1.5, soft: 2.8, split: 0.05,
+    dyeColor: "#101a4d", dyeBlend: "ink", sat: 0.85, contrast: 1.1, idle: 0.3, ink: 1.9, rad: 6, force: 0.8 },
+  CHROME: { _c: "#c8e2ff",
+    warp: 9, curl: 26, vel: 1.4, dyeDecay: 3.5, glow: 0.35, split: 1.1, sat: 0.12,
+    contrast: 1.38, exposure: 0.05, grain: 0.12, dyeColor: "#c8e2ff", flow: 1.3 },
+  SMOKE: { _c: "#8a8f99",
+    warp: 4, curl: 8, vel: 0.35, dyeDecay: 0.8, glow: 0.9, soft: 3.4, split: 0.08,
+    sat: 0.4, contrast: 0.95, dyeColor: "#8a8f99", vig: 0.3, idle: 0.5, wanSpd: 0.4, rad: 7 },
+  PLASMA: { _c: "#ff3ec8",
+    warp: 8, curl: 52, vel: 1.8, dyeDecay: 1.2, glow: 2, soft: 1.2, split: 0.5,
+    dyeMode: "cycle", hueSpd: 1.2, sat: 1.4, exposure: 0.08, idle: 0.45, punch: 3 },
+  GLASS: { _c: "#9fd8ff",
+    warp: 15, curl: 18, vel: 1.2, glow: 0, dyeBlend: "none", dyeDecay: 4, split: 0.14,
+    contrast: 1.05, flow: 1.7, amb: 2.4, idle: 0.2 },
+  HURRICANE: { _c: "#6fe3ff",
+    warp: 11, curl: 78, vel: 2.6, dyeDecay: 2.2, glow: 1.2, soft: 0.8, split: 0.4,
+    idle: 0.6, swirl: 96, force: 1.9, dyeColor: "#6fe3ff", iters: 24, res: 176 },
+  WHISPER: { _c: "#dfe3ea",
+    warp: 1.2, curl: 4, vel: 0.9, dyeDecay: 3.4, glow: 0.3, soft: 1.4, split: 0.06,
+    amb: 2.2, ambSpd: 0.4, idle: 0.1, dyeColor: "#ffffff", force: 0.5 },
+  ACID: { _c: "#a8ff00",
+    warp: 6.5, curl: 44, vel: 1.5, dyeDecay: 1.1, glow: 2.4, soft: 0.9, split: 0.7,
+    dyeColor: "#a8ff00", sat: 1.5, contrast: 1.2, grain: 0.26, idle: 0.4 },
+  TAR: { _c: "#241a12",
+    warp: 3.2, curl: 10, vel: 0.3, dyeDecay: 0.5, glow: 1.1, soft: 2, split: 0.12,
+    dyeColor: "#120a06", dyeBlend: "ink", exposure: -0.18, contrast: 1.25, sat: 0.7,
+    vig: 0.6, ink: 1.7, rad: 6.5 },
+  NEBULA: { _c: "#7b4dff",
+    warp: 6, curl: 30, vel: 0.8, dyeDecay: 0.6, glow: 1.8, soft: 3.2, split: 0.3,
+    dyeColor: "#7b4dff", dyeBlend: "screen", sat: 1.25, vig: 0.45, idle: 0.5,
+    wanAmp: 26, wanSpd: 0.7, res: 176 },
+  RIPTIDE: { _c: "#26d6c8",
+    warp: 7.5, curl: 20, vel: 1, dyeDecay: 2, glow: 0.9, split: 0.2, drift: 66, dang: 180,
+    dyeColor: "#26d6c8", sat: 1.2, idle: 0.55, flow: 1.2 },
+  UPDRAFT: { _c: "#ffb347",
+    warp: 5.5, curl: 24, vel: 0.9, dyeDecay: 1.4, glow: 1.4, drift: 72, dang: 90,
+    dyeColor: "#ffb347", soft: 2, idle: 0.5, vig: 0.2 },
+  XEROX: { _c: "#ffffff",
+    warp: 4.5, curl: 30, vel: 1.6, dyeDecay: 2.6, glow: 0.5, split: 0.05, sat: 0,
+    contrast: 1.75, exposure: 0.1, grain: 0.5, dyeColor: "#ffffff", res: 96 },
+  "OIL SLICK": { _c: "#00e0a4",
+    warp: 10, curl: 40, vel: 1.1, dyeDecay: 1.3, glow: 1.6, soft: 1.4, split: 0.85,
+    dyeMode: "flow", sat: 1.35, contrast: 1.12, vig: 0.25, idle: 0.45, flow: 1.4 },
+  MIRAGE: { _c: "#ffe9c2",
+    warp: 12, curl: 14, vel: 0.7, dyeMode: "pickup", dyeDecay: 1, glow: 1.2, soft: 2.6,
+    split: 0.18, dyeBlend: "screen", exposure: 0.06, sat: 1.1, amb: 8, ambSpd: 0.45, idle: 0.6 },
+  MELTDOWN: { _c: "#ff2d55",
+    warp: 20, curl: 62, vel: 2.2, dyeDecay: 1.8, glow: 2.6, soft: 1, split: 0.6,
+    dyeColor: "#ff2d55", sat: 1.3, contrast: 1.15, idle: 0.8, force: 2.4, punch: 4,
+    rad: 5, iters: 20, res: 176 },
+};
+
+/* ---------------- shaders ---------------- */
+
+const VERT = `
+attribute vec2 p; varying vec2 vUv;
+void main(){ vUv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }`;
+
+const FRAG_ADVECT = `
+precision highp float; varying vec2 vUv;
+uniform sampler2D uVelocity, uSource; uniform vec2 uTexel;
+uniform float uDt, uDissipation;
+void main(){
+  vec2 coord = vUv - uDt * texture2D(uVelocity, vUv).xy * uTexel;
+  gl_FragColor = uDissipation * texture2D(uSource, coord);
+}`;
+
+/* uColor is vec4 so the dye pass can carry a colour in .rgb and its coverage in
+   .a — coverage is what lets a near-black ink read as "thick" instead of "faded" */
+const FRAG_SPLAT = `
+precision highp float; varying vec2 vUv;
+uniform sampler2D uTarget; uniform float uAspect, uRadius;
+uniform vec2 uPoint; uniform vec4 uColor;
+void main(){
+  vec2 p = vUv - uPoint; p.x *= uAspect;
+  gl_FragColor = texture2D(uTarget, vUv) + exp(-dot(p, p) / uRadius) * uColor;
+}`;
+
+const FRAG_CURL = `
+precision highp float; varying vec2 vUv;
+uniform sampler2D uVelocity; uniform vec2 uTexel;
+void main(){
+  float L = texture2D(uVelocity, vUv - vec2(uTexel.x, 0.0)).y;
+  float R = texture2D(uVelocity, vUv + vec2(uTexel.x, 0.0)).y;
+  float B = texture2D(uVelocity, vUv - vec2(0.0, uTexel.y)).x;
+  float T = texture2D(uVelocity, vUv + vec2(0.0, uTexel.y)).x;
+  gl_FragColor = vec4(0.5 * (R - L - T + B), 0.0, 0.0, 1.0);
+}`;
+
+const FRAG_VORTICITY = `
+precision highp float; varying vec2 vUv;
+uniform sampler2D uVelocity, uCurl; uniform vec2 uTexel;
+uniform float uCurlStrength, uDt;
+void main(){
+  float L = texture2D(uCurl, vUv - vec2(uTexel.x, 0.0)).x;
+  float R = texture2D(uCurl, vUv + vec2(uTexel.x, 0.0)).x;
+  float B = texture2D(uCurl, vUv - vec2(0.0, uTexel.y)).x;
+  float T = texture2D(uCurl, vUv + vec2(0.0, uTexel.y)).x;
+  float C = texture2D(uCurl, vUv).x;
+  vec2 force = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L));
+  force /= length(force) + 1e-4;
+  force *= uCurlStrength * C;
+  force.y *= -1.0;
+  vec2 vel = texture2D(uVelocity, vUv).xy + force * uDt;
+  gl_FragColor = vec4(vel, 0.0, 1.0);
+}`;
+
+const FRAG_DIVERGENCE = `
+precision highp float; varying vec2 vUv;
+uniform sampler2D uVelocity; uniform vec2 uTexel;
+void main(){
+  float L = texture2D(uVelocity, vUv - vec2(uTexel.x, 0.0)).x;
+  float R = texture2D(uVelocity, vUv + vec2(uTexel.x, 0.0)).x;
+  float B = texture2D(uVelocity, vUv - vec2(0.0, uTexel.y)).y;
+  float T = texture2D(uVelocity, vUv + vec2(0.0, uTexel.y)).y;
+  gl_FragColor = vec4(0.5 * (R - L + T - B), 0.0, 0.0, 1.0);
+}`;
+
+const FRAG_PRESSURE = `
+precision highp float; varying vec2 vUv;
+uniform sampler2D uPressure, uDivergence; uniform vec2 uTexel;
+void main(){
+  float L = texture2D(uPressure, vUv - vec2(uTexel.x, 0.0)).x;
+  float R = texture2D(uPressure, vUv + vec2(uTexel.x, 0.0)).x;
+  float B = texture2D(uPressure, vUv - vec2(0.0, uTexel.y)).x;
+  float T = texture2D(uPressure, vUv + vec2(0.0, uTexel.y)).x;
+  float div = texture2D(uDivergence, vUv).x;
+  gl_FragColor = vec4((L + R + B + T - div) * 0.25, 0.0, 0.0, 1.0);
+}`;
+
+/* uForce rides along here: a uniform push is already divergence-free, so adding
+   it after the gradient subtract costs nothing and stays stable */
+const FRAG_GRADIENT = `
+precision highp float; varying vec2 vUv;
+uniform sampler2D uPressure, uVelocity; uniform vec2 uTexel;
+uniform vec2 uForce; uniform float uDt;
+void main(){
+  float L = texture2D(uPressure, vUv - vec2(uTexel.x, 0.0)).x;
+  float R = texture2D(uPressure, vUv + vec2(uTexel.x, 0.0)).x;
+  float B = texture2D(uPressure, vUv - vec2(0.0, uTexel.y)).x;
+  float T = texture2D(uPressure, vUv + vec2(0.0, uTexel.y)).x;
+  vec2 vel = texture2D(uVelocity, vUv).xy - 0.5 * vec2(R - L, T - B);
+  gl_FragColor = vec4(vel + uForce * uDt, 0.0, 1.0);
+}`;
+
+/* The display pass. The heading version derives its edge sheen from glyph
+   alpha; on an opaque photo that term cancels to nothing, so this does a true
+   per-channel offset along the flow, then grades the result. */
+const FRAG_DISPLAY = `
+precision highp float; varying vec2 vUv;
+uniform sampler2D uTex, uVelocity, uDye;
+uniform vec2 uTexel, uSimTexel;
+uniform float uEnergy, uTime, uMaxDispUv, uVelToUv, uFlow;
+uniform float uSplit, uGlow, uSoft, uBlend, uView;
+uniform float uAmb, uAmbSpeed, uExposure, uContrast, uSat, uGrain, uVig;
+
+float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+vec4 dyeAt(vec2 uv){
+  vec4 d = texture2D(uDye, uv);
+  if (uSoft > 0.01) {                       // cheap cross blur — bloomier dye
+    vec2 o = uSimTexel * uSoft;
+    d = (d * 2.0
+      + texture2D(uDye, uv + vec2(o.x, 0.0))
+      + texture2D(uDye, uv - vec2(o.x, 0.0))
+      + texture2D(uDye, uv + vec2(0.0, o.y))
+      + texture2D(uDye, uv - vec2(0.0, o.y))) / 6.0;
+  }
+  return d;
+}
+
+void main(){
+  vec2 vel = texture2D(uVelocity, vUv).xy;
+  // flow displacement (carries real momentum) + faint global breathing
+  vec2 amb = vec2(
+    sin(vUv.y * 11.0 + uTime * 1.4 * uAmbSpeed) + 0.6 * sin(vUv.x * 17.0 - uTime * 0.9 * uAmbSpeed),
+    cos(vUv.x * 9.0 - uTime * 1.1 * uAmbSpeed) + 0.6 * cos(vUv.y * 15.0 + uTime * 1.3 * uAmbSpeed)
+  ) * uAmb * uTexel;
+  vec2 disp = vel * uVelToUv * uFlow + amb;
+  float len = length(disp);
+  if (len > uMaxDispUv) disp *= uMaxDispUv / len;
+  disp *= uEnergy;
+
+  vec4 c = texture2D(uTex, vUv - disp);
+  vec3 col = c.rgb;
+  if (uSplit > 0.005) {
+    vec2 cd = disp * uSplit;
+    col.r = texture2D(uTex, vUv - disp - cd).r;
+    col.b = texture2D(uTex, vUv - disp + cd).b;
+  }
+
+  vec4 d = dyeAt(vUv - disp * 0.5);
+  float cov = max(d.a, 0.0) * uEnergy * uGlow;
+  vec3 tint = d.rgb / max(d.a, 1e-4);
+
+  if (uView > 1.5) {                                  // velocity field
+    col = vec3(vel * 0.03 + 0.5, 0.5);
+  } else if (uView > 0.5) {                           // dye field
+    col = tint * clamp(cov, 0.0, 4.0);
+  } else if (uBlend < 0.5) {                          // glow / add
+    col += tint * cov;
+  } else if (uBlend < 1.5) {                          // screen
+    col = 1.0 - (1.0 - col) * (1.0 - clamp(tint * cov, 0.0, 1.0));
+  } else if (uBlend < 2.5) {                          // ink — stains with the dye colour
+    col = mix(col, tint, clamp(cov, 0.0, 1.0));
+  }
+
+  col *= exp2(uExposure);
+  col = (col - 0.5) * uContrast + 0.5;
+  col = mix(vec3(luma(col)), col, uSat);
+  if (uGrain > 0.001) {
+    float n = fract(sin(dot(vUv * vec2(423.7, 917.3) + uTime, vec2(12.9898, 78.233))) * 43758.5453);
+    col += (n - 0.5) * uGrain * 0.35;
+  }
+  if (uVig > 0.001) {
+    float r = length((vUv - 0.5) * vec2(1.06, 1.0));
+    col *= 1.0 - uVig * clamp(pow(r * 1.5, 2.2), 0.0, 1.0);
+  }
+
+  float a = clamp(c.a + clamp(cov, 0.0, 1.0) * 0.15 * (1.0 - c.a), 0.0, 1.0);
+  gl_FragColor = vec4(max(col, 0.0), a);
+}`;
+
+/* ---------------- GL helpers ---------------- */
+
+function makeProgram(gl, frag) {
+  const compile = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, frag));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+/* pull the uniform names straight out of the source so adding a uniform to a
+   shader never needs a matching edit to a hand-kept list */
+function uniformNames(src) {
+  const out = [];
+  const re = /uniform\s+\w+\s+([^;]+);/g;
+  let m;
+  while ((m = re.exec(src))) {
+    for (const n of m[1].split(",")) out.push(n.trim());
+  }
+  return out;
+}
+
+function makeFBO(gl, w, h, filtering) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filtering);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filtering);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  return { fb, tex, w, h };
+}
+
+function makeDoubleFBO(gl, w, h, filtering) {
+  const d = { read: makeFBO(gl, w, h, filtering), write: makeFBO(gl, w, h, filtering) };
+  d.swap = () => { const t = d.read; d.read = d.write; d.write = t; };
+  return d;
+}
+
+/* ---------------- state + panel ---------------- */
+
+const $ = (id) => document.getElementById(id);
+const stage = $("stage"), canvas = $("cv"), drop = $("drop");
+const dropSub = $("dropSub"), dropLabel = $("dropLabel");
+
+const S = Object.assign({}, DEFAULTS);
+const el = {};
+let activePreset = "SIGNATURE";
+
+function buildPanel() {
+  const parts = [];
+
+  parts.push(`<details class="grp" open><summary>Image</summary><div class="body">
+    <label class="btn btn-primary"><input type="file" accept="image/*" id="pick2" hidden />Choose image</label>
+    <div class="btn-row">
+      <button class="btn" id="save" disabled>Save PNG</button>
+      <button class="btn" id="calm">Calm</button>
+    </div>
+    <span class="fname" id="fname"></span>
+  </div></details>`);
+
+  const chips = Object.keys(PRESETS).map((n) =>
+    `<button class="chip" data-preset="${n}" style="--dot:${PRESETS[n]._c}"><i></i>${n}</button>`).join("");
+  parts.push(`<details class="grp" open><summary>Presets</summary><div class="body">
+    <div class="chips" id="chips">${chips}</div>
+    <div class="btn-row">
+      <button class="btn" id="rand">Surprise me</button>
+      <button class="btn" id="reset">Reset all</button>
+    </div>
+  </div></details>`);
+
+  for (const g of GROUPS) {
+    const rows = SPEC.filter((s) => s.g === g).map((s) => {
+      const id = `c_${s.k}`;
+      if (s.t === "range") {
+        return `<div class="row" data-k="${s.k}" title="double-click to reset">
+          <div class="row-head"><span>${s.label}</span><b id="v_${s.k}"></b></div>
+          <input type="range" id="${id}" min="${s.min}" max="${s.max}" step="${s.step}" />
+        </div>`;
+      }
+      if (s.t === "bool") {
+        return `<label class="check" data-k="${s.k}"><input type="checkbox" id="${id}" /> ${s.label}</label>`;
+      }
+      if (s.t === "select") {
+        const o = s.opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+        return `<div class="row" data-k="${s.k}">
+          <div class="row-head"><span>${s.label}</span></div>
+          <select id="${id}">${o}</select>
+        </div>`;
+      }
+      return `<div class="row" data-k="${s.k}">
+        <div class="row-head"><span>${s.label}</span></div>
+        <input type="color" id="${id}" />
+      </div>`;
+    }).join("");
+    parts.push(`<details class="grp" open><summary>${g}</summary><div class="body">${rows}</div></details>`);
+  }
+
+  parts.push(`<p class="note">
+    advect → splat → curl → vorticity confinement → divergence → pressure Jacobi →
+    gradient subtract, in half-float FBOs. Move the cursor to push momentum in, click for
+    a burst.<br /><br />
+    <kbd>space</kbd> freeze · <kbd>C</kbd> calm · <kbd>R</kbd> random · <kbd>S</kbd> save ·
+    <kbd>H</kbd> hide panel · <kbd>1</kbd>–<kbd>9</kbd> presets
+  </p>`);
+
+  $("panel").innerHTML = parts.join("");
+
+  for (const s of SPEC) {
+    el[s.k] = $(`c_${s.k}`);
+    const ev = s.t === "select" ? "change" : "input";
+    el[s.k].addEventListener(ev, () => {
+      S[s.k] = s.t === "bool" ? el[s.k].checked
+        : s.t === "range" ? Number(el[s.k].value)
+        : el[s.k].value;
+      if (s.realloc) queueRealloc();
+      markCustom();
+      syncUI();
+    });
+    const row = document.querySelector(`[data-k="${s.k}"]`);
+    if (s.t === "range") {
+      row.addEventListener("dblclick", () => { S[s.k] = s.def; markCustom(); syncUI(); });
+    }
+  }
+
+  $("chips").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-preset]");
+    if (b) applyPreset(b.dataset.preset);
+  });
+  $("reset").addEventListener("click", () => applyPreset("SIGNATURE"));
+  $("rand").addEventListener("click", randomize);
+  $("save").addEventListener("click", savePng);
+  $("calm").addEventListener("click", calm);
+  $("pick2").addEventListener("change", (e) => {
+    if (e.target.files[0]) load(e.target.files[0]);
+    e.target.value = "";
+  });
+}
+
+function syncUI() {
+  for (const s of SPEC) {
+    if (s.t === "bool") el[s.k].checked = S[s.k];
+    else el[s.k].value = S[s.k];
+    if (s.t === "range") $(`v_${s.k}`).textContent = s.fmt(Number(S[s.k]));
+    const row = document.querySelector(`[data-k="${s.k}"]`);
+    row.classList.toggle("off", !!s.dep && !s.dep(S));   // dim controls the current mode ignores
+  }
+}
+
+function markCustom(name) {
+  activePreset = name || null;
+  for (const c of document.querySelectorAll("[data-preset]")) {
+    c.classList.toggle("on", c.dataset.preset === activePreset);
+  }
+}
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return;
+  const prevRes = S.res;
+  Object.assign(S, DEFAULTS, p);
+  delete S._c;
+  markCustom(name);
+  syncUI();
+  if (S.res !== prevRes) queueRealloc();
+}
+
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+function randomize() {
+  Object.assign(S, DEFAULTS, {
+    warp: rnd(2, 14),
+    flow: rnd(0.7, 2),
+    curl: Math.round(rnd(4, 70)),
+    vel: rnd(0.3, 2.4),
+    dyeDecay: rnd(0.4, 4),
+    glow: rnd(0.3, 2.4),
+    soft: rnd(0.4, 3.4),
+    split: rnd(0, 0.9),
+    rad: rnd(1.5, 8),
+    force: rnd(0.6, 2.2),
+    ink: rnd(0.6, 1.8),
+    idle: rnd(0.15, 0.6),
+    amb: rnd(1.5, 10),
+    ambSpd: rnd(0.3, 1.6),
+    contrast: rnd(0.92, 1.35),
+    sat: rnd(0.2, 1.5),
+    grain: Math.random() < 0.35 ? rnd(0.05, 0.35) : 0,
+    vig: Math.random() < 0.5 ? rnd(0.1, 0.55) : 0,
+    drift: Math.random() < 0.3 ? Math.round(rnd(20, 90)) : 0,
+    dang: Math.round(rnd(0, 360)),
+    dyeMode: pick(["fixed", "fixed", "cycle", "flow", "pickup"]),
+    dyeBlend: pick(["add", "add", "screen", "ink"]),
+    dyeColor: "#" + [0, 1, 2].map(() =>
+      Math.floor(rnd(20, 255)).toString(16).padStart(2, "0")).join(""),
+  });
+  markCustom();
+  syncUI();
+}
+
+/* ---------------- sim ---------------- */
+
+let gl = null;
+const programs = {}, uni = {};
+let velocity, dye, pressure, divergence, curlFbo;
+let sourceTex = null;
+let simW = 144, simH = 96;
+let cssW = 0, cssH = 0;
+let bitmap = null, swatchData = null;
+let raf = 0, running = false;
+let time = 0, energy = 0, last = 0;
+let hovered = false, burstUntil = 0;
+let frames = 0, fpsAt = 0, fps = 0;
+const pointer = { x: 0.5, y: 0.5, dx: 0, dy: 0, moved: false };
+
+let failTimer = 0;
+function fail(msg) {
+  drop.classList.add("err");
+  drop.hidden = false;
+  clearTimeout(failTimer);
+  if (bitmap) {
+    // something's already loaded — flash the message on the corner chip rather
+    // than tearing the working image down
+    dropLabel.textContent = msg;
+    failTimer = setTimeout(() => {
+      drop.classList.remove("err");
+      dropLabel.textContent = "Swap image";
+    }, 2600);
+    return;
+  }
+  drop.classList.remove("mini");
+  dropLabel.textContent = "Drop an image here";
+  dropSub.textContent = msg;
+  canvas.hidden = true;
+}
+
+function initGL() {
+  if (gl) return true;
+  gl = canvas.getContext("webgl2", {
+    alpha: true, premultipliedAlpha: false, depth: false,
+    stencil: false, antialias: false, preserveDrawingBuffer: true,
+  });
+  if (!gl) { fail("This browser has no WebGL2 — the solver can't run."); return false; }
+  if (!gl.getExtension("EXT_color_buffer_float")) {
+    fail("No float render buffers available — the solver can't run.");
+    gl = null;
+    return false;
+  }
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+  const frags = {
+    advect: FRAG_ADVECT, splat: FRAG_SPLAT, curl: FRAG_CURL, vorticity: FRAG_VORTICITY,
+    divergence: FRAG_DIVERGENCE, pressure: FRAG_PRESSURE, gradient: FRAG_GRADIENT,
+    display: FRAG_DISPLAY,
+  };
+  try {
+    for (const [name, frag] of Object.entries(frags)) {
+      const p = makeProgram(gl, frag);
+      programs[name] = p;
+      gl.useProgram(p);
+      const loc = gl.getAttribLocation(p, "p");
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      uni[name] = {};
+      for (const n of uniformNames(frag)) uni[name][n] = gl.getUniformLocation(p, n);
+    }
+  } catch (e) {
+    fail("Shader compile failed: " + e.message);
+    gl = null;
+    return false;
+  }
+  return true;
+}
+
+function blit(target) {
+  if (target) {
+    gl.viewport(0, 0, target.w, target.h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb);
+  } else {
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+function bindTex(tex, unit) {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  return unit;
+}
+
+function allocSim() {
+  simW = Math.round(S.res);
+  simH = Math.max(48, Math.round((simW * cssH) / cssW));
+  const linear = gl.LINEAR;
+  velocity = makeDoubleFBO(gl, simW, simH, linear);
+  dye = makeDoubleFBO(gl, simW, simH, linear);
+  pressure = makeDoubleFBO(gl, simW, simH, gl.NEAREST);
+  divergence = makeFBO(gl, simW, simH, gl.NEAREST);
+  curlFbo = makeFBO(gl, simW, simH, gl.NEAREST);
+}
+
+let reallocTimer = 0;
+function queueRealloc() {
+  clearTimeout(reallocTimer);
+  reallocTimer = setTimeout(() => { if (gl && bitmap) allocSim(); }, 120);
+}
+
+function layout() {
+  if (!bitmap) return;
+  const box = stage.getBoundingClientRect();
+  const pad = 52;
+  const availW = Math.max(80, box.width - pad);
+  const availH = Math.max(80, box.height - pad);
+  const ar = bitmap.width / bitmap.height;
+  let w = availW, h = w / ar;
+  if (h > availH) { h = availH; w = h * ar; }
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cssW = w; cssH = h;
+  canvas.style.width = Math.round(w) + "px";
+  canvas.style.height = Math.round(h) + "px";
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  allocSim();
+}
+
+function uploadSource() {
+  if (sourceTex) gl.deleteTexture(sourceTex);
+  sourceTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, sourceTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);   // canvas is top-down, GL uv is bottom-up
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+
+/* a 64px thumbnail read once at load — lets the "pick up image colour" dye mode
+   sample the photo per splat without ever touching the GPU pipeline */
+function buildSwatches() {
+  const n = 64;
+  const cv = document.createElement("canvas");
+  cv.width = n; cv.height = n;
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, n, n);
+  swatchData = ctx.getImageData(0, 0, n, n);
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return [
+    parseInt(h.slice(0, 2), 16) / 255,
+    parseInt(h.slice(2, 4), 16) / 255,
+    parseInt(h.slice(4, 6), 16) / 255,
+  ];
+}
+function hsv(h, s, v) {
+  h = ((h % 1) + 1) % 1;
+  const i = Math.floor(h * 6), f = h * 6 - i;
+  const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+  return [[v,t,p],[q,v,p],[p,v,t],[p,q,v],[t,p,v],[v,p,q]][i % 6];
+}
+function sampleImage(x, y) {
+  if (!swatchData) return [1, 1, 1];
+  const n = 64;
+  const ix = Math.min(n - 1, Math.max(0, Math.round(x * (n - 1))));
+  const iy = Math.min(n - 1, Math.max(0, Math.round((1 - y) * (n - 1))));
+  const o = (iy * n + ix) * 4;
+  const d = swatchData.data;
+  const m = Math.max(d[o], d[o + 1], d[o + 2]) || 1;   // normalise so dark pixels still read as colour
+  return [d[o] / m, d[o + 1] / m, d[o + 2] / m];
+}
+
+function dyeColorAt(x, y, dx, dy) {
+  switch (S.dyeMode) {
+    case "cycle": return hsv(time * S.hueSpd * 0.25, 0.85, 1);
+    case "flow":  return hsv(Math.atan2(dy, dx) / (Math.PI * 2), 0.85, 1);
+    case "pickup": return sampleImage(x, y);
+    default: return hexToRgb(S.dyeColor);
+  }
+}
+
+function splat(x, y, vx, vy, dyeAmt, radMul) {
+  const u = uni.splat;
+  gl.useProgram(programs.splat);
+  gl.uniform1f(u.uAspect, simW / simH);
+  gl.uniform2f(u.uPoint, x, y);
+  gl.uniform1f(u.uRadius, (S.rad * (radMul || 1)) / 1000);
+  gl.uniform1i(u.uTarget, bindTex(velocity.read.tex, 0));
+  gl.uniform4f(u.uColor, vx, vy, 0, 0);
+  blit(velocity.write); velocity.swap();
+
+  if (dyeAmt > 0) {
+    const [r, g, b] = dyeColorAt(x, y, vx, vy);
+    gl.uniform1i(u.uTarget, bindTex(dye.read.tex, 0));
+    gl.uniform4f(u.uColor, r * dyeAmt, g * dyeAmt, b * dyeAmt, dyeAmt);
+    blit(dye.write); dye.swap();
+  }
+}
+
+/* a ring of outward splats — a single gaussian can't push radially */
+function burst(x, y) {
+  const p = S.punch;
+  if (p <= 0) return;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const cx = Math.cos(a), cy = Math.sin(a);
+    splat(x + cx * 0.035, y + cy * 0.035, cx * 900 * p, cy * 900 * p, 0.35 * S.ink, 0.7);
+  }
+}
+
+function step(dt) {
+  const tx = 1 / simW, ty = 1 / simH;
+
+  // cursor → fluid, matching the headings: momentum while moving, a rotating
+  // stir under a resting cursor, and a slow wander when there's no cursor
+  if (pointer.moved) {
+    const speed = Math.hypot(pointer.dx, pointer.dy);
+    splat(pointer.x, pointer.y,
+      pointer.dx * 4000 * S.force, pointer.dy * 4000 * S.force,
+      Math.min(0.12 + speed * 6, 1) * S.ink);
+    pointer.moved = false;
+  } else if (hovered) {
+    const a = time * 3.2;
+    splat(pointer.x, pointer.y, Math.cos(a) * S.swirl, Math.sin(a) * S.swirl, 0.02 * S.ink);
+  } else if (S.wander) {
+    const a = time * 0.9 * S.wanSpd;
+    splat(0.5 + Math.cos(time * 0.5 * S.wanSpd) * 0.3, 0.5 + Math.sin(time * 0.37 * S.wanSpd) * 0.24,
+      Math.cos(a) * S.wanAmp, Math.sin(a) * S.wanAmp, 0.015 * S.ink);
+  }
+
+  let u = uni.curl;
+  gl.useProgram(programs.curl);
+  gl.uniform2f(u.uTexel, tx, ty);
+  gl.uniform1i(u.uVelocity, bindTex(velocity.read.tex, 0));
+  blit(curlFbo);
+
+  u = uni.vorticity;
+  gl.useProgram(programs.vorticity);
+  gl.uniform2f(u.uTexel, tx, ty);
+  gl.uniform1f(u.uCurlStrength, S.curl);
+  gl.uniform1f(u.uDt, dt);
+  gl.uniform1i(u.uVelocity, bindTex(velocity.read.tex, 0));
+  gl.uniform1i(u.uCurl, bindTex(curlFbo.tex, 1));
+  blit(velocity.write); velocity.swap();
+
+  u = uni.divergence;
+  gl.useProgram(programs.divergence);
+  gl.uniform2f(u.uTexel, tx, ty);
+  gl.uniform1i(u.uVelocity, bindTex(velocity.read.tex, 0));
+  blit(divergence);
+
+  u = uni.pressure;
+  gl.useProgram(programs.pressure);
+  gl.uniform2f(u.uTexel, tx, ty);
+  gl.uniform1i(u.uDivergence, bindTex(divergence.tex, 1));
+  const iters = Math.round(S.iters);
+  for (let i = 0; i < iters; i++) {
+    gl.uniform1i(u.uPressure, bindTex(pressure.read.tex, 0));
+    blit(pressure.write); pressure.swap();
+  }
+
+  u = uni.gradient;
+  gl.useProgram(programs.gradient);
+  gl.uniform2f(u.uTexel, tx, ty);
+  const ang = (S.dang * Math.PI) / 180;
+  gl.uniform2f(u.uForce, Math.cos(ang) * S.drift, Math.sin(ang) * S.drift);
+  gl.uniform1f(u.uDt, dt);
+  gl.uniform1i(u.uPressure, bindTex(pressure.read.tex, 0));
+  gl.uniform1i(u.uVelocity, bindTex(velocity.read.tex, 1));
+  blit(velocity.write); velocity.swap();
+
+  u = uni.advect;
+  gl.useProgram(programs.advect);
+  gl.uniform2f(u.uTexel, tx, ty);
+  gl.uniform1f(u.uDt, dt);
+  gl.uniform1f(u.uDissipation, 1 / (1 + dt * S.vel));
+  gl.uniform1i(u.uVelocity, bindTex(velocity.read.tex, 0));
+  gl.uniform1i(u.uSource, bindTex(velocity.read.tex, 0));
+  blit(velocity.write); velocity.swap();
+
+  gl.uniform1f(u.uDissipation, 1 / (1 + dt * S.dyeDecay));
+  gl.uniform1i(u.uVelocity, bindTex(velocity.read.tex, 0));
+  gl.uniform1i(u.uSource, bindTex(dye.read.tex, 1));
+  blit(dye.write); dye.swap();
+}
+
+const BLEND_ID = { add: 0, screen: 1, ink: 2, none: 3 };
+const VIEW_ID = { composite: 0, dye: 1, velocity: 2 };
+
+function render() {
+  const u = uni.display;
+  gl.useProgram(programs.display);
+  gl.uniform1i(u.uTex, bindTex(sourceTex, 0));
+  gl.uniform1i(u.uVelocity, bindTex(velocity.read.tex, 1));
+  gl.uniform1i(u.uDye, bindTex(dye.read.tex, 2));
+  gl.uniform1f(u.uEnergy, energy);
+  gl.uniform1f(u.uTime, time);
+  gl.uniform2f(u.uTexel, 1 / cssW, 1 / cssH);
+  gl.uniform2f(u.uSimTexel, 1 / simW, 1 / simH);
+  gl.uniform1f(u.uVelToUv, 0.055 / simW);
+  gl.uniform1f(u.uFlow, S.flow);
+  gl.uniform1f(u.uMaxDispUv, S.warp / 100);
+  gl.uniform1f(u.uSplit, S.split);
+  gl.uniform1f(u.uGlow, S.glow);
+  gl.uniform1f(u.uSoft, S.soft);
+  gl.uniform1f(u.uBlend, BLEND_ID[S.dyeBlend]);
+  gl.uniform1f(u.uView, VIEW_ID[S.view]);
+  gl.uniform1f(u.uAmb, S.amb);
+  gl.uniform1f(u.uAmbSpeed, S.ambSpd);
+  gl.uniform1f(u.uExposure, S.exposure);
+  gl.uniform1f(u.uContrast, S.contrast);
+  gl.uniform1f(u.uSat, S.sat);
+  gl.uniform1f(u.uGrain, S.grain);
+  gl.uniform1f(u.uVig, S.vig);
+  gl.clearColor(0, 0, 0, 0);
+  blit(null);
+}
+
+function tick(now) {
+  if (!running) return;
+  const dt = Math.min((now - last) / 1000, 1 / 30) || 1 / 60;
+  last = now;
+  time += dt;
+  const target = hovered && now < burstUntil ? 1 : S.idle;
+  const rate = target > energy ? 1 - Math.pow(0.0001, dt) : 1 - Math.pow(0.05, dt);
+  energy += (target - energy) * rate;
+  if (!S.freeze) step(dt);
+  render();
+
+  frames++;
+  if (now - fpsAt > 500) {
+    fps = Math.round((frames * 1000) / (now - fpsAt));
+    frames = 0; fpsAt = now;
+    $("stat").textContent = `${simW}×${simH} · ${fps} fps`;
+  }
+  raf = requestAnimationFrame(tick);
+}
+
+function calm() {
+  if (!gl) return;
+  // zero the velocity + dye fields without touching the image
+  for (const f of [velocity.read, velocity.write, dye.read, dye.write, pressure.read, pressure.write]) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f.fb);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+  energy = 0;
+}
+
+function savePng() {
+  if (!bitmap) return;
+  const name = ($("fname").textContent.split(" · ")[0] || "liquid").replace(/\.[^.]+$/, "");
+  const tag = activePreset ? "-" + activePreset.toLowerCase().replace(/\s+/g, "") : "";
+  const a = document.createElement("a");
+  a.download = name + "-liquid" + tag + ".png";
+  a.href = canvas.toDataURL("image/png");
+  a.click();
+}
+
+async function load(file) {
+  if (!file || !file.type.startsWith("image/")) { fail("That's not an image file."); return; }
+  drop.classList.remove("err");
+  dropSub.textContent = "Decoding…";
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const cv = document.createElement("canvas");
+    cv.width = w; cv.height = h;
+    cv.getContext("2d").drawImage(img, 0, 0, w, h);
+    bitmap = cv;
+  } catch {
+    fail("Could not decode that image.");
+    return;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+
+  if (!initGL()) return;
+  buildSwatches();
+  dropSub.textContent = DROP_SUB;       // clear "Decoding…" so a later bad file reads right
+  dropLabel.textContent = "Swap image";
+  drop.classList.add("mini");           // shrink to a corner chip, keep the drop target
+  drop.hidden = false;
+  canvas.hidden = false;
+  $("save").disabled = false;
+  $("fname").textContent = file.name + " · " + bitmap.width + "×" + bitmap.height;
+  layout();
+  uploadSource();
+  energy = 0;
+  if (!running) { running = true; last = performance.now(); fpsAt = last; raf = requestAnimationFrame(tick); }
+}
+
+/* ---- input wiring ---- */
+
+buildPanel();
+applyPreset("SIGNATURE");
+
+$("pick").addEventListener("change", (e) => {
+  if (e.target.files[0]) load(e.target.files[0]);
+  e.target.value = "";
+});
+
+for (const ev of ["dragenter", "dragover"]) {
+  stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.add("drag"); });
+}
+stage.addEventListener("dragleave", (e) => {
+  if (e.target === stage) stage.classList.remove("drag");
+});
+stage.addEventListener("drop", (e) => {
+  e.preventDefault();
+  stage.classList.remove("drag");
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) load(f);
+});
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+
+function toLocal(e) {
+  const r = canvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width;
+  const y = 1 - (e.clientY - r.top) / r.height;
+  pointer.dx = x - pointer.x;
+  pointer.dy = y - pointer.y;
+  pointer.x = x;
+  pointer.y = y;
+}
+const holdBurst = () => { burstUntil = performance.now() + S.burst * 1000; };
+canvas.addEventListener("pointerenter", (e) => {
+  hovered = true; holdBurst();
+  toLocal(e); pointer.dx = 0; pointer.dy = 0;
+});
+canvas.addEventListener("pointermove", (e) => {
+  hovered = true; holdBurst();
+  toLocal(e); pointer.moved = true;
+});
+canvas.addEventListener("pointerdown", (e) => {
+  hovered = true; holdBurst();
+  toLocal(e);
+  if (gl && bitmap) burst(pointer.x, pointer.y);
+});
+canvas.addEventListener("pointerleave", () => { hovered = false; });
+
+$("togglePanel").addEventListener("click", () => {
+  document.body.classList.toggle("nopanel");
+  if (bitmap && gl) { layout(); uploadSource(); }
+});
+
+const PRESET_KEYS = Object.keys(PRESETS);
+window.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // a focused slider shouldn't swallow the shortcuts, but a select / colour /
+  // checkbox needs its own keys
+  const t = e.target;
+  const typing = t.tagName === "SELECT" || t.tagName === "TEXTAREA" ||
+    (t.tagName === "INPUT" && t.type !== "range");
+  if (typing) return;
+  const k = e.key.toLowerCase();
+  if (k === " ") {
+    e.preventDefault();
+    S.freeze = !S.freeze; syncUI();
+  } else if (k === "c") { calm(); }
+  else if (k === "r") { randomize(); }
+  else if (k === "s") { savePng(); }
+  else if (k === "h") { $("togglePanel").click(); }
+  else if (/^[1-9]$/.test(k)) { applyPreset(PRESET_KEYS[Number(k) - 1]); }
+});
+
+let resizeTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (!bitmap || !gl) return;
+    layout();
+    uploadSource();
+  }, 180);
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { running = false; cancelAnimationFrame(raf); }
+  else if (bitmap && gl) {
+    running = true; last = performance.now(); fpsAt = last;
+    raf = requestAnimationFrame(tick);
+  }
+});
+</script>
+</body>
+</html>
