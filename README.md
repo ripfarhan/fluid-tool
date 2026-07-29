@@ -67,6 +67,17 @@ per-channel (RGB) offset along the flow instead — the `chromatic split` dial.
   *thick* rather than as *faded* — that's what makes the `ink` blend work.
 - `drift force` is added after the gradient subtract: a uniform push is already
   divergence-free, so it costs nothing and stays stable.
+- The brush impulse comes from the pointer's **speed** (uv/second, clamped to 6
+  widths/s), not from the raw gap between two pointer events. Feeding the
+  per-event delta in directly — as the headings do — makes the force depend on
+  event coalescing instead of hand speed: one long frame or a re-entry across
+  the canvas lands a ~110× impulse spike that shears the whole field into a
+  single gust. Hops over 0.35 widths in one event are treated as a teleport and
+  re-seed the stroke rather than being splatted.
+- The walls are no-through-flow (the normal velocity component is zeroed in the
+  border texel). Without it, momentum driven into an edge is held there,
+  `CLAMP_TO_EDGE` sampling feeds it back in, and the projection spreads the
+  pile-up across the whole field.
 - `pick up image colour` samples a 64px thumbnail read once at load, so the dye
   takes the photo's own colours without ever reading back from the GPU.
 - Once an image is up, the dropzone shrinks to a corner chip — still a live drop

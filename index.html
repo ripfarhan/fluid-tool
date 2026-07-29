@@ -389,6 +389,17 @@
 const MAX_EDGE = 1600;        // cap uploads so huge photos don't stall
 const DROP_SUB = "or click to browse · PNG, JPG, WebP";
 
+/* Brush impulse is built from the pointer's *speed*, not from the raw gap
+   between two pointer events. Feeding the per-event delta straight in (as the
+   headings do) makes the force depend on event coalescing rather than on how
+   fast the cursor is actually moving: one long frame, or a re-entry across the
+   canvas, lands a single delta ~0.9 of the width and a ~110x impulse spike —
+   the "massive wind" that flattens the whole field. */
+const STROKE_K = 4000 / 60;   // uv/s -> velocity units; matches the old 60fps feel exactly
+const MAX_STROKE_UV = 6;      // widths/second the brush will honour, hard ceiling
+const JUMP_UV = 0.35;         // a bigger single hop is a teleport, not a stroke
+const SPLAT_INSET = 0.02;     // keep splat centres inside the domain (see burst)
+
 /* ---------------- control surface ----------------
    One flat spec drives the state object, the panel DOM, the readouts and the
    presets — add a line here and everything downstream picks it up. */
@@ -606,7 +617,13 @@ void main(){
   float B = texture2D(uPressure, vUv - vec2(0.0, uTexel.y)).x;
   float T = texture2D(uPressure, vUv + vec2(0.0, uTexel.y)).x;
   vec2 vel = texture2D(uVelocity, vUv).xy - 0.5 * vec2(R - L, T - B);
-  gl_FragColor = vec4(vel + uForce * uDt, 0.0, 1.0);
+  vel += uForce * uDt;
+  // no through-flow at the walls. Without this the border texels keep whatever
+  // normal velocity was pushed into them — CLAMP_TO_EDGE sampling then feeds it
+  // back in, and the projection turns the pile-up into a field-wide gust.
+  if (vUv.x < uTexel.x || vUv.x > 1.0 - uTexel.x) vel.x = 0.0;
+  if (vUv.y < uTexel.y || vUv.y > 1.0 - uTexel.y) vel.y = 0.0;
+  gl_FragColor = vec4(vel, 0.0, 1.0);
 }`;
 
 /* The display pass. The heading version derives its edge sheen from glyph
@@ -914,7 +931,10 @@ let raf = 0, running = false;
 let time = 0, energy = 0, last = 0;
 let hovered = false, burstUntil = 0;
 let frames = 0, fpsAt = 0, fps = 0;
-const pointer = { x: 0.5, y: 0.5, dx: 0, dy: 0, moved: false };
+/* ax/ay accumulate the movement since the last splat, t/t0 bracket the time it
+   took — so several events inside one frame add up instead of the last one
+   winning, and the result is a real speed rather than an event-spacing artefact */
+const pointer = { x: 0.5, y: 0.5, ax: 0, ay: 0, t: 0, t0: 0, moved: false };
 
 let failTimer = 0;
 function fail(msg) {
@@ -1104,14 +1124,19 @@ function splat(x, y, vx, vy, dyeAmt, radMul) {
   }
 }
 
-/* a ring of outward splats — a single gaussian can't push radially */
+/* a ring of outward splats — a single gaussian can't push radially.
+   Centres are clamped into the domain: a gaussian centred outside it leaves only
+   its monotonic flank inside, which reads as a hard one-way shove against the
+   wall instead of a symmetric burst. */
+const inside = (v) => Math.min(1 - SPLAT_INSET, Math.max(SPLAT_INSET, v));
 function burst(x, y) {
   const p = S.punch;
   if (p <= 0) return;
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     const cx = Math.cos(a), cy = Math.sin(a);
-    splat(x + cx * 0.035, y + cy * 0.035, cx * 900 * p, cy * 900 * p, 0.35 * S.ink, 0.7);
+    splat(inside(x + cx * 0.035), inside(y + cy * 0.035),
+      cx * 900 * p, cy * 900 * p, 0.35 * S.ink, 0.7);
   }
 }
 
@@ -1121,11 +1146,17 @@ function step(dt) {
   // cursor → fluid, matching the headings: momentum while moving, a rotating
   // stir under a resting cursor, and a slow wander when there's no cursor
   if (pointer.moved) {
-    const speed = Math.hypot(pointer.dx, pointer.dy);
+    // movement / elapsed = uv per second, then clamped — so the impulse tracks
+    // how fast the cursor really moved and can't spike on a long frame
+    const span = Math.max((pointer.t - pointer.t0) / 1000, 1 / 240);
+    let sx = pointer.ax / span, sy = pointer.ay / span;
+    const raw = Math.hypot(sx, sy);
+    if (raw > MAX_STROKE_UV) { const k = MAX_STROKE_UV / raw; sx *= k; sy *= k; }
+    const speed = Math.min(raw, MAX_STROKE_UV);
     splat(pointer.x, pointer.y,
-      pointer.dx * 4000 * S.force, pointer.dy * 4000 * S.force,
-      Math.min(0.12 + speed * 6, 1) * S.ink);
-    pointer.moved = false;
+      sx * STROKE_K * S.force, sy * STROKE_K * S.force,
+      Math.min(0.12 + speed * 0.1, 1) * S.ink);
+    reseed(pointer.t);
   } else if (hovered) {
     const a = time * 3.2;
     splat(pointer.x, pointer.y, Math.cos(a) * S.swirl, Math.sin(a) * S.swirl, 0.02 * S.ink);
@@ -1327,23 +1358,36 @@ stage.addEventListener("drop", (e) => {
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => e.preventDefault());
 
+function reseed(t) {
+  pointer.ax = 0; pointer.ay = 0;
+  pointer.t = t; pointer.t0 = t;
+  pointer.moved = false;
+}
+
 function toLocal(e) {
   const r = canvas.getBoundingClientRect();
   const x = (e.clientX - r.left) / r.width;
   const y = 1 - (e.clientY - r.top) / r.height;
-  pointer.dx = x - pointer.x;
-  pointer.dy = y - pointer.y;
+  const dx = x - pointer.x, dy = y - pointer.y;
   pointer.x = x;
   pointer.y = y;
+  // a hop this large is a re-entry, a coalesced hitch or a tab regaining focus —
+  // start a fresh stroke from here rather than splatting the gap as momentum
+  if (Math.hypot(dx, dy) > JUMP_UV) { reseed(e.timeStamp); return; }
+  pointer.ax += dx;
+  pointer.ay += dy;
+  pointer.t = e.timeStamp;
+  pointer.moved = true;
 }
 const holdBurst = () => { burstUntil = performance.now() + S.burst * 1000; };
 canvas.addEventListener("pointerenter", (e) => {
   hovered = true; holdBurst();
-  toLocal(e); pointer.dx = 0; pointer.dy = 0;
+  toLocal(e);
+  reseed(e.timeStamp);   // arriving is never a stroke, however far the cursor came
 });
 canvas.addEventListener("pointermove", (e) => {
   hovered = true; holdBurst();
-  toLocal(e); pointer.moved = true;
+  toLocal(e);
 });
 canvas.addEventListener("pointerdown", (e) => {
   hovered = true; holdBurst();
