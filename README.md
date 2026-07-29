@@ -49,7 +49,45 @@ Buttons: **Save PNG** (current frame, named after the active preset), **Calm**
 (zero the velocity/dye fields without reloading the image), **Reset all**.
 
 Keys: <kbd>space</kbd> freeze · <kbd>C</kbd> calm · <kbd>R</kbd> random ·
-<kbd>S</kbd> save · <kbd>H</kbd> hide panel · <kbd>1</kbd>–<kbd>9</kbd> presets.
+<kbd>S</kbd> save PNG · <kbd>V</kbd> record · <kbd>H</kbd> hide panel ·
+<kbd>1</kbd>–<kbd>9</kbd> presets.
+
+## Recording
+
+**Record** runs a countdown (default 5s — adjustable 0–15, `off` starts
+instantly) so you can get the cursor onto the image, then captures until you
+press **Stop**. Only the image is recorded; no UI, no cursor.
+
+| dial | default | notes |
+| --- | --- | --- |
+| countdown | 5s | pre-roll before capture starts; `0` = immediate |
+| frame rate | 60 fps | also 30 / 24 |
+| format | auto | prefers MP4/H.264, falls back to WebM/VP9 → VP8 |
+| quality | high | bits-per-pixel-per-frame: web 0.06, high 0.15, max 0.3 |
+
+Encoding details that matter:
+
+- Frames come from a separate 2D canvas that composites onto an **opaque**
+  background, so images with alpha don't record as black or pick up premultiply
+  fringing.
+- That canvas holds **one fixed, even-numbered size** for the whole take. H.264
+  requires even dimensions, and changing a track's resolution mid-recording
+  upsets muxers — so resizing the window mid-take can't corrupt the file.
+- `captureStream(0)` + `requestFrame()` paces frames off the render loop rather
+  than letting the browser sample whenever it likes.
+- MediaRecorder timestamps frames by arrival, so the file's timeline is real
+  wall-clock time and **playback speed is always correct** — even if the loop
+  can't hold the target rate. When it can't, the status line says so
+  (`ran at 34 fps`) instead of pretending.
+- The take is assembled on whichever lands last, the flush chunk or `onstop`
+  plus a grace period. VP9 can emit its first chunk *after* `onstop`, and
+  finalising on `onstop` alone yields an empty file.
+- Chunked at 1s (bounded memory), auto-stops at 10 min, and banks what it has if
+  the tab is hidden — `requestAnimationFrame` stops when hidden, so continuing
+  would only record a freeze frame.
+- **WebM caveat:** browsers write MediaRecorder WebM without a duration tag, so
+  some editors read the clip as unbounded. MP4 has no such problem, which is why
+  `auto` prefers it. The panel says so when you pick WebM.
 
 ## The one deliberate difference from the headings
 

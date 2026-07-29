@@ -277,6 +277,76 @@
   .btn-primary { background: rgba(232, 125, 13, 0.14); border-color: rgba(232, 125, 13, 0.5); }
   .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 
+  .btn-rec {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: rgba(208, 71, 63, 0.12);
+    border-color: rgba(208, 71, 63, 0.5);
+    color: #f0a09a;
+  }
+  .btn-rec:hover:not(:disabled) { border-color: #d0473f; color: #ff8079; }
+  .btn-rec b {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #d0473f; flex: none; font-size: 0;
+  }
+  .btn-rec.live { background: rgba(208, 71, 63, 0.22); color: #ffd9d6; }
+  .btn-rec.live b { animation: blink 1s steps(2, start) infinite; }
+  .btn-rec.count b { border-radius: 2px; }
+  @keyframes blink { to { opacity: 0.15; } }
+
+  /* countdown / REC readout over the stage. pointer-events:none so it never
+     steals the cursor the fluid needs */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 4;
+  }
+  .overlay .num {
+    font-family: var(--mono);
+    font-size: 132px;
+    font-weight: 600;
+    letter-spacing: -0.04em;
+    color: rgba(255, 255, 255, 0.9);
+    text-shadow: 0 4px 40px rgba(0, 0, 0, 0.85);
+    font-variant-numeric: tabular-nums;
+  }
+  .overlay .hint {
+    position: absolute;
+    bottom: 26px;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.72);
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9);
+  }
+  .reclive {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(13, 13, 15, 0.72);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(208, 71, 63, 0.55);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    color: #ffd9d6;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    z-index: 4;
+  }
+  .reclive i {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #d0473f; flex: none;
+    animation: blink 1s steps(2, start) infinite;
+  }
+
   .chips {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -374,6 +444,11 @@
       <strong id="dropLabel">Drop an image here</strong>
       <span id="dropSub">or click to browse · PNG, JPG, WebP</span>
     </label>
+    <div class="overlay" id="overlay" hidden>
+      <span class="num" id="countNum"></span>
+      <span class="hint" id="countHint">get your cursor onto the image</span>
+    </div>
+    <div class="reclive" id="recLive" hidden><i></i><span id="recClock">0:00</span></div>
   </div>
 
   <aside id="panel"></aside>
@@ -409,6 +484,16 @@ const x2 = (v) => v.toFixed(2);
 const int = (v) => String(Math.round(v));
 
 const SPEC = [
+  // --- record --- (noPreset: capture settings are the user's, not a preset's)
+  { k: "countdown", g: "Record", t: "range", label: "countdown", min: 0, max: 15, step: 1, def: 5,
+    fmt: (v) => (v > 0 ? Math.round(v) + "s" : "off"), noPreset: true },
+  { k: "fps", g: "Record", t: "select", label: "frame rate", def: "60", noPreset: true, opts: [
+      ["60", "60 fps"], ["30", "30 fps"], ["24", "24 fps"]] },
+  { k: "vformat", g: "Record", t: "select", label: "format", def: "auto", noPreset: true, opts: [
+      ["auto", "auto (best available)"], ["mp4", "MP4 · H.264"], ["webm", "WebM · VP9"]] },
+  { k: "vquality", g: "Record", t: "select", label: "quality", def: "high", noPreset: true, opts: [
+      ["high", "high"], ["max", "max (large files)"], ["web", "web (small files)"]] },
+
   // --- flow ---
   { k: "warp",     g: "Flow",   t: "range", label: "warp",            min: 0,    max: 24,  step: 0.1,  def: 3.5, fmt: (v) => v.toFixed(1) + "%" },
   { k: "flow",     g: "Flow",   t: "range", label: "flow follow",     min: 0,    max: 4,   step: 0.05, def: 1,   fmt: x2 },
@@ -458,9 +543,10 @@ const SPEC = [
   { k: "freeze",   g: "Motion", t: "bool",   label: "freeze solver",   def: false },
 ];
 
-const GROUPS = ["Flow", "Brush", "Dye", "Look", "Motion"];
+const GROUPS = ["Record", "Flow", "Brush", "Dye", "Look", "Motion"];
 const DEFAULTS = {};
 for (const s of SPEC) DEFAULTS[s.k] = s.def;
+const KEEP_KEYS = SPEC.filter((s) => s.noPreset).map((s) => s.k);
 
 /* ---------------- presets ----------------
    Each one is a delta on DEFAULTS, so switching between them is deterministic.
@@ -812,18 +898,25 @@ function buildPanel() {
         <input type="color" id="${id}" />
       </div>`;
     }).join("");
-    parts.push(`<details class="grp" open><summary>${g}</summary><div class="body">${rows}</div></details>`);
+    parts.push(`<details class="grp" open><summary>${g}</summary>
+      <div class="body" id="body_${g}">${rows}</div></details>`);
   }
 
   parts.push(`<p class="note">
     advect → splat → curl → vorticity confinement → divergence → pressure Jacobi →
     gradient subtract, in half-float FBOs. Move the cursor to push momentum in, click for
     a burst.<br /><br />
-    <kbd>space</kbd> freeze · <kbd>C</kbd> calm · <kbd>R</kbd> random · <kbd>S</kbd> save ·
-    <kbd>H</kbd> hide panel · <kbd>1</kbd>–<kbd>9</kbd> presets
+    <kbd>space</kbd> freeze · <kbd>C</kbd> calm · <kbd>R</kbd> random · <kbd>S</kbd> save PNG ·
+    <kbd>V</kbd> record · <kbd>H</kbd> hide panel · <kbd>1</kbd>–<kbd>9</kbd> presets
   </p>`);
 
   $("panel").innerHTML = parts.join("");
+
+  // the record button lives above the capture dials; the dials themselves are
+  // generated from SPEC like everything else
+  $("body_Record").insertAdjacentHTML("afterbegin", `
+    <button class="btn btn-rec" id="recBtn" disabled><b>rec</b><span id="recLabel">Record</span></button>
+    <span class="stat" id="recStat"></span>`);
 
   for (const s of SPEC) {
     el[s.k] = $(`c_${s.k}`);
@@ -850,6 +943,7 @@ function buildPanel() {
   $("rand").addEventListener("click", randomize);
   $("save").addEventListener("click", savePng);
   $("calm").addEventListener("click", calm);
+  $("recBtn").addEventListener("click", toggleRecord);
   $("pick2").addEventListener("change", (e) => {
     if (e.target.files[0]) load(e.target.files[0]);
     e.target.value = "";
@@ -864,6 +958,7 @@ function syncUI() {
     const row = document.querySelector(`[data-k="${s.k}"]`);
     row.classList.toggle("off", !!s.dep && !s.dep(S));   // dim controls the current mode ignores
   }
+  updateRecStat();   // format / fps / quality feed the codec + size readout
 }
 
 function markCustom(name) {
@@ -873,11 +968,17 @@ function markCustom(name) {
   }
 }
 
+function keepers() {
+  const keep = {};
+  for (const k of KEEP_KEYS) keep[k] = S[k];
+  return keep;
+}
+
 function applyPreset(name) {
   const p = PRESETS[name];
   if (!p) return;
   const prevRes = S.res;
-  Object.assign(S, DEFAULTS, p);
+  Object.assign(S, DEFAULTS, p, keepers());
   delete S._c;
   markCustom(name);
   syncUI();
@@ -913,7 +1014,7 @@ function randomize() {
     dyeBlend: pick(["add", "add", "screen", "ink"]),
     dyeColor: "#" + [0, 1, 2].map(() =>
       Math.floor(rnd(20, 255)).toString(16).padStart(2, "0")).join(""),
-  });
+  }, keepers());
   markCustom();
   syncUI();
 }
@@ -1264,6 +1365,7 @@ function tick(now) {
   energy += (target - energy) * rate;
   if (!S.freeze) step(dt);
   render();
+  captureFrame(now);   // must follow render(), before the next rAF yields
 
   frames++;
   if (now - fpsAt > 500) {
@@ -1285,14 +1387,276 @@ function calm() {
   energy = 0;
 }
 
+/* ---------------- recording ----------------
+   Frames come from a 2D scratch canvas rather than straight off the WebGL one:
+   - it composites onto an opaque background, so images with alpha don't record
+     as black or pick up premultiply fringing,
+   - it holds one fixed, even-numbered size for the whole take (H.264 needs even
+     dimensions, and changing a track's resolution mid-recording upsets muxers),
+     so a window resize mid-take can't corrupt the file.
+   captureStream(0) + requestFrame() gives exact frame pacing off our own loop
+   instead of letting the browser sample whenever it feels like it. */
+
+const REC_BG = "#0d0d0f";        // matches --bg, so the video looks like the app
+const REC_MAX_EDGE = 1920;       // stay inside comfortable H.264 level limits
+const REC_MAX_MS = 10 * 60000;   // safety auto-stop, surfaced in the status line
+const BPP = { web: 0.06, high: 0.15, max: 0.3 };   // bits per pixel per frame
+
+const CODECS = [
+  "video/mp4;codecs=avc1.640029",   // H.264 high — best compatibility for sharing
+  "video/mp4;codecs=avc1.42E01E",   // H.264 baseline
+  "video/mp4",
+  "video/webm;codecs=vp9",
+  "video/webm;codecs=vp8",
+  "video/webm",
+];
+
+let recorder = null, recStream = null, recTrack = null;
+let recCanvas = null, recCtx = null, recChunks = [], recBytes = 0;
+let recState = "idle";           // idle | counting | recording
+let recMime = "", recFps = 60, recFrames = 0, recErr = "";
+let recStartedAt = 0, recEndedAt = 0, recNextFrame = 0, recCountEnd = 0, recUiTimer = 0;
+
+function pickMime() {
+  if (typeof MediaRecorder === "undefined") return "";
+  const want = S.vformat;
+  const list = want === "auto" ? CODECS
+    : CODECS.filter((m) => m.startsWith("video/" + want));
+  for (const m of list) if (MediaRecorder.isTypeSupported(m)) return m;
+  // asked-for container isn't available — fall back rather than fail
+  for (const m of CODECS) if (MediaRecorder.isTypeSupported(m)) return m;
+  return "";
+}
+
+function mimeLabel(m) {
+  if (!m) return "recording unsupported in this browser";
+  const box = m.includes("mp4") ? "MP4" : "WebM";
+  const codec = /avc1/.test(m) ? "H.264" : /vp9/.test(m) ? "VP9"
+    : /vp8/.test(m) ? "VP8" : /av01/.test(m) ? "AV1" : "default";
+  return box + " · " + codec;
+}
+
+function updateRecStat() {
+  const m = pickMime();
+  const parts = [mimeLabel(m)];
+  if (m && recCanvas) parts.push(recCanvas.width + "×" + recCanvas.height);
+  else if (m && bitmap) {
+    const d = recDims();
+    parts.push(d.w + "×" + d.h);
+  }
+  if (recState === "recording") {
+    parts.push((recBytes / 1048576).toFixed(1) + " MB");
+    parts.push(recFrames + " frames");
+  } else if (m.includes("webm")) {
+    // browsers write WebM from MediaRecorder without a duration tag, so some
+    // editors show the clip as unbounded. MP4 doesn't have the problem.
+    parts.push("no duration tag — MP4 is safer for editors");
+  }
+  $("recStat").textContent = parts.join(" · ");
+  $("recBtn").disabled = !bitmap || !m;
+}
+
+function recDims() {
+  // even dimensions, capped, derived from the live canvas backing store
+  const scale = Math.min(1, REC_MAX_EDGE / Math.max(canvas.width, canvas.height));
+  const even = (v) => Math.max(2, Math.floor(v * scale / 2) * 2);
+  return { w: even(canvas.width), h: even(canvas.height) };
+}
+
+function fmtClock(ms) {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+}
+
+function setRecUi() {
+  const btn = $("recBtn"), label = $("recLabel");
+  btn.classList.toggle("live", recState === "recording");
+  btn.classList.toggle("count", recState === "counting");
+  $("recLive").hidden = recState !== "recording";
+  $("overlay").hidden = recState !== "counting";
+  if (recState === "idle") label.textContent = "Record";
+  else if (recState === "counting") {
+    const left = Math.ceil((recCountEnd - performance.now()) / 1000);
+    label.textContent = "Cancel · " + Math.max(0, left);
+    $("countNum").textContent = String(Math.max(1, left));
+  } else {
+    const el = performance.now() - recStartedAt;
+    label.textContent = "Stop · " + fmtClock(el);
+    $("recClock").textContent = fmtClock(el);
+  }
+}
+
+function toggleRecord() {
+  if (recState === "idle") beginCountdown();
+  else if (recState === "counting") cancelCountdown();
+  else stopRecording();
+}
+
+function beginCountdown() {
+  if (!bitmap || !gl) return;
+  const secs = Math.round(S.countdown);
+  if (secs <= 0) { startRecording(); return; }
+  recState = "counting";
+  recCountEnd = performance.now() + secs * 1000;
+  setRecUi();
+  clearInterval(recUiTimer);
+  recUiTimer = setInterval(() => {
+    if (recState !== "counting") return;
+    if (performance.now() >= recCountEnd) startRecording();
+    else setRecUi();
+  }, 100);
+}
+
+function cancelCountdown() {
+  clearInterval(recUiTimer);
+  recState = "idle";
+  setRecUi();
+  updateRecStat();
+}
+
+function startRecording() {
+  clearInterval(recUiTimer);
+  recMime = pickMime();
+  if (!recMime) { recState = "idle"; setRecUi(); updateRecStat(); return; }
+
+  const { w, h } = recDims();
+  recCanvas = document.createElement("canvas");
+  recCanvas.width = w; recCanvas.height = h;
+  recCtx = recCanvas.getContext("2d", { alpha: false, desynchronized: true });
+  recCtx.fillStyle = REC_BG;
+  recCtx.fillRect(0, 0, w, h);
+
+  recFps = Number(S.fps) || 60;
+  recChunks = []; recBytes = 0; recFrames = 0; recErr = "";
+
+  try {
+    recStream = recCanvas.captureStream(0);
+    recTrack = recStream.getVideoTracks()[0];
+    if (!recTrack || typeof recTrack.requestFrame !== "function") {
+      // no manual pacing available — let the browser sample at our target rate
+      recStream.getTracks().forEach((t) => t.stop());
+      recStream = recCanvas.captureStream(recFps);
+      recTrack = recStream.getVideoTracks()[0];
+    }
+    const bitrate = Math.min(48e6, Math.max(6e6,
+      Math.round(w * h * recFps * (BPP[S.vquality] || BPP.high))));
+    recorder = new MediaRecorder(recStream, {
+      mimeType: recMime,
+      videoBitsPerSecond: bitrate,
+    });
+  } catch (e) {
+    recState = "idle";
+    $("recStat").textContent = "recorder failed: " + e.message;
+    return;
+  }
+
+  /* Assemble on whichever lands last: the flush chunk, or onstop plus a grace
+     period. VP9 can emit its first chunk *after* onstop on a slow flush, and
+     finalising on onstop alone then yields an empty file. `settled` makes it
+     exactly-once either way. */
+  const mr = recorder;
+  let settled = false;
+  const settle = () => { if (settled) return; settled = true; finishRecording(mr); };
+  mr.ondataavailable = (e) => {
+    if (e.data && e.data.size) { recChunks.push(e.data); recBytes += e.data.size; }
+    if (mr.state === "inactive") settle();
+  };
+  mr.onerror = (e) => {
+    recErr = "recorder error: " + ((e.error && e.error.name) || "unknown");
+    stopRecording();
+  };
+  mr.onstop = () => setTimeout(settle, 400);
+
+  recState = "recording";
+  recStartedAt = performance.now();
+  recNextFrame = recStartedAt;
+  recorder.start(1000);          // chunk per second — bounded memory, crash-tolerant
+  // paint frame zero immediately so the file never opens on a blank first frame
+  captureFrame(recStartedAt, true);
+  setRecUi();
+  updateRecStat();
+  recUiTimer = setInterval(() => {
+    if (recState !== "recording") return;
+    if (performance.now() - recStartedAt > REC_MAX_MS) {
+      $("recStat").textContent = "hit the 10 min safety limit — saving";
+      stopRecording();
+      return;
+    }
+    setRecUi();
+    updateRecStat();
+  }, 250);
+}
+
+/* called from the render loop, right after the frame is drawn */
+function captureFrame(now, force) {
+  if (recState !== "recording" || !recCtx) return;
+  const step = 1000 / recFps;
+  if (!force && now < recNextFrame) return;
+  // advance on a fixed grid so the timeline stays even; resync if we fell behind
+  recNextFrame = now - recNextFrame > step * 4 ? now + step : recNextFrame + step;
+  recCtx.fillStyle = REC_BG;
+  recCtx.fillRect(0, 0, recCanvas.width, recCanvas.height);
+  recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height);
+  if (recTrack.requestFrame) recTrack.requestFrame();
+  recFrames++;
+}
+
+function stopRecording() {
+  if (recState !== "recording") return;
+  clearInterval(recUiTimer);
+  recEndedAt = performance.now();
+  recState = "idle";
+  setRecUi();
+  try { recorder.stop(); } catch { /* already stopped */ }
+}
+
+function finishRecording(mr) {
+  const mime = (mr && mr.mimeType) || recMime;
+  const ext = mime.includes("mp4") ? "mp4" : "webm";
+  const blob = new Blob(recChunks, { type: mime.split(";")[0] });
+  if (recStream) recStream.getTracks().forEach((t) => t.stop());
+  recorder = null; recStream = null; recTrack = null;
+  recCanvas = null; recCtx = null;
+  recChunks = [];
+
+  if (!blob.size) {
+    $("recStat").textContent = recErr || "nothing captured — the encoder returned no data";
+    recErr = "";
+    return;
+  }
+  // MediaRecorder timestamps frames by arrival, so the file's timeline is real
+  // wall-clock time — report that, not frames/fps, which would under-report any
+  // take where the loop couldn't hold the target rate
+  const secs = Math.max(0.001, (recEndedAt - recStartedAt) / 1000);
+  const eff = recFrames / secs;
+  saveBlob(blob, outName() + "." + ext);
+  const dropped = eff < recFps * 0.8 ? ` · ran at ${eff.toFixed(0)} fps` : "";
+  $("recStat").textContent =
+    `saved ${ext.toUpperCase()} · ${secs.toFixed(1)}s · ${recFrames} frames` +
+    `${dropped} · ${(blob.size / 1048576).toFixed(1)} MB` +
+    (recErr ? " · interrupted" : "");
+  recErr = "";
+}
+
+/* single exit point for writing a file out, so the download path is one place */
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.download = name;
+  a.href = url;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function outName() {
+  const base = ($("fname").textContent.split(" · ")[0] || "liquid").replace(/\.[^.]+$/, "");
+  const tag = activePreset ? "-" + activePreset.toLowerCase().replace(/\s+/g, "") : "";
+  return base + "-liquid" + tag;
+}
+
 function savePng() {
   if (!bitmap) return;
-  const name = ($("fname").textContent.split(" · ")[0] || "liquid").replace(/\.[^.]+$/, "");
-  const tag = activePreset ? "-" + activePreset.toLowerCase().replace(/\s+/g, "") : "";
-  const a = document.createElement("a");
-  a.download = name + "-liquid" + tag + ".png";
-  a.href = canvas.toDataURL("image/png");
-  a.click();
+  canvas.toBlob((b) => { if (b) saveBlob(b, outName() + ".png"); }, "image/png");
 }
 
 async function load(file) {
@@ -1329,6 +1693,7 @@ async function load(file) {
   $("fname").textContent = file.name + " · " + bitmap.width + "×" + bitmap.height;
   layout();
   uploadSource();
+  updateRecStat();
   energy = 0;
   if (!running) { running = true; last = performance.now(); fpsAt = last; raf = requestAnimationFrame(tick); }
 }
@@ -1417,6 +1782,7 @@ window.addEventListener("keydown", (e) => {
   } else if (k === "c") { calm(); }
   else if (k === "r") { randomize(); }
   else if (k === "s") { savePng(); }
+  else if (k === "v") { if (bitmap) toggleRecord(); }
   else if (k === "h") { $("togglePanel").click(); }
   else if (/^[1-9]$/.test(k)) { applyPreset(PRESET_KEYS[Number(k) - 1]); }
 });
@@ -1431,7 +1797,14 @@ window.addEventListener("resize", () => {
   }, 180);
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) { running = false; cancelAnimationFrame(raf); }
+  if (document.hidden) {
+    // rAF stops when hidden, so a take would freeze mid-shot — bank it instead
+    if (recState === "recording") {
+      stopRecording();
+      $("recStat").textContent = "tab hidden — saved what was captured";
+    } else if (recState === "counting") cancelCountdown();
+    running = false; cancelAnimationFrame(raf);
+  }
   else if (bitmap && gl) {
     running = true; last = performance.now(); fpsAt = last;
     raf = requestAnimationFrame(tick);
